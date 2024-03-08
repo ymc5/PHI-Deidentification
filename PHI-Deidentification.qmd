@@ -8,26 +8,24 @@ format:
 
 ```{r setup, include=FALSE}
 #| warning: false
-library(tidyverse)     # loads the tidyverse tools
-library(RPostgres)     # loads the database driver for PostgreSQL
-library(connections)   # helps RPostgres work with RStudio
-library(keyring)       # access to a local encrypted keychain for passwords
+library(tidyverse)     
+library(RPostgres)     
+library(connections)   
+library(keyring)       
 
 
 con <- connection_open(RPostgres::Postgres(),
-          dbname = "syntheticMGUH",
-          host = "35.199.4.72",
-          user = "hids502_student",
-          password = key_get(service = "syntheticmguh", 
-                             username = "hids502_student"),
-          # Tell the driver to return very large integers as floating point (vs truncating them)
-          bigint = "numeric")
+          dbname = "",
+          host = "",
+          user = "",
+          password = ,
+
 
 ```
 
 ## I. Objective
 
--   In order to implement the de-identification of protected health information (PHI) learned during the lecture, tables from the SyntheticMGUH database were used to create a de-identified patient lookup table for further analysis without violating any Privacy Rules.
+-   In order to implement the de-identification of protected health information (PHI) learned during the lecture, tables from the database were used to create a de-identified patient lookup table for further analysis without violating any Privacy Rules.
 -   The criteria used to select patients to be de-identified were established based on the 'inpatientregistry' table.
 
 ## II. Process
