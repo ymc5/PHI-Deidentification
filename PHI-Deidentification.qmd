@@ -1,0 +1,261 @@
+---
+title: "Lecture 7 Homework (Youngmin Choi)"
+subtitle: "Data Management (De-identification of PHI)"
+format: 
+  html:
+    self-contained: true
+---
+
+```{r setup, include=FALSE}
+#| warning: false
+library(tidyverse)     # loads the tidyverse tools
+library(RPostgres)     # loads the database driver for PostgreSQL
+library(connections)   # helps RPostgres work with RStudio
+library(keyring)       # access to a local encrypted keychain for passwords
+
+
+con <- connection_open(RPostgres::Postgres(),
+          dbname = "syntheticMGUH",
+          host = "35.199.4.72",
+          user = "hids502_student",
+          password = key_get(service = "syntheticmguh", 
+                             username = "hids502_student"),
+          # Tell the driver to return very large integers as floating point (vs truncating them)
+          bigint = "numeric")
+
+```
+
+## I. Objective
+
+-   In order to implement the de-identification of protected health information (PHI) learned during the lecture, tables from the SyntheticMGUH database were used to create a de-identified patient lookup table for further analysis without violating any Privacy Rules.
+-   The criteria used to select patients to be de-identified were established based on the 'inpatientregistry' table.
+
+## II. Process
+
+1)  Create a table 'randomTable' with each patient id connected to randomized values for date shift and id number change.
+2)  De-identify PHI and create a fully de-identified table 'full_lookup'.
+3)  Create a limited data set table 'limit_lookup'
+4)  Compare unique patients so confirm these are the same table.
+
+## III. Results
+
+1)  **Create random value table**
+
+    ```{sql connection=con, include=FALSE}
+    DROP TABLE IF EXISTS randomTable
+    ```
+
+    ```{sql connection=con}
+
+            -- Create data table to assign random numbers to each patients for date shift & id number de-identification. 
+            WITH date_shifts_lookup AS (
+              SELECT i.medical_record_id AS ds_id, 
+              CAST(RANDOM() * 100 AS INT) AS random_date_offset
+              FROM inpatientregistry AS i
+              ), 
+              mrn_lookup AS (
+              SELECT it.medical_record_id AS mr_id, 
+              row_number() OVER (ORDER BY medical_record_id) AS new_medical_record_id
+              FROM (SELECT DISTINCT medical_record_id FROM inpatientregistry) AS it
+              ),
+              random AS (SELECT * FROM date_shifts_lookup AS d
+              INNER JOIN
+              mrn_lookup AS m
+              ON d.ds_id=m.mr_id)
+              
+              SELECT ds_id AS id, random_date_offset AS date_shift, new_medical_record_id AS mr_shift INTO TEMP randomTable FROM random
+              
+
+    ```
+
+2)  **Fully De-identified Table**
+
+    -   De-identified columns: 'medical_record_id', 'birthdate', 'deathdate', 'first', 'last', 'address', 'city', 'county', 'zip', 'encounter_id', 'admission_date', 'discharge_date'
+
+    -   Rationale for column selection:
+
+        -   HIPAA PHI identifiers (18 elements) from lecture note.
+
+        -   'Guidance Regarding Methods for De-identification of PHI in Accordance with the HIPAA Privacy Rule' from US Department of Health and Human Services.
+
+        ```{sql connection=con, include=FALSE}
+        DROP TABLE IF EXISTS full_lookup
+        ```
+
+    ```{sql connection=con}
+    --- Create data table with fully de-identified PHI. 
+    WITH fullLookup AS (
+    SELECT (i.medical_record_id + r.mr_shift)  AS id, 
+      CAST(i.birthdate AS DATE) + r.date_shift AS birthdate,
+      CAST(i.deathdate AS DATE) + r.date_shift AS deathdate,
+      DATE_PART('YEAR',AGE(CAST(deathdate AS DATE),CAST (birthdate AS DATE))) AS death_age,
+      MD5(CONCAT(i.first, i.last)) AS fullname, 
+      i.race AS race,
+      i.ethnicity AS ethnicity,
+      i.gender AS gender,
+      MD5(i.address) AS address,
+      MD5(i.city) AS city,
+      i.state AS state,
+      MD5(i.county) AS county,
+      CAST((i.zip+RANDOM()*1000) AS INT) AS zip,
+      i.encounterclass AS encounterclass,
+      (i.encounter_id + r.mr_shift) AS encounter_id,
+      CAST(admission_date AS DATE) + r.date_shift AS admission_date,
+      DATE_PART('YEAR',AGE(CAST(admission_date AS DATE), CAST(birthdate AS DATE))) AS admission_age,
+      CAST(discharge_date AS DATE) + r.date_shift AS discharge_date,
+      i.code AS code,
+      i.description AS description,
+      i.reasoncode AS reasoncode, 
+      i.reasondescription AS reasondescription
+      
+    FROM inpatientregistry AS i
+    INNER JOIN 
+    randomTable AS r
+    ON i.medical_record_id=r.id)
+
+    SELECT * INTO TEMP full_lookup FROM fullLookup
+
+
+    ```
+
+    ```{sql connection=con}
+    --- Check if table have been created successfully. 
+    SELECT * FROM full_lookup LIMIT 5
+    ```
+
+3)  **Limited Data Set Table**
+
+    -   De-identified columns: 'medical_record_id', 'birthdate', 'first', 'last', 'address', 'encounter_id', 'zip'
+
+    -   Rationale for column selection:
+
+        -   Lecture note '3. Levels of Deidentified Data'.
+
+        -   'Limited Data Set and Data Use Agreement' from National Institutes of Health.
+
+        ```{sql connection=con, include=FALSE}
+        DROP TABLE IF EXISTS limit_lookup
+        ```
+
+    ```{sql connection=con}
+    WITH limitLookup AS (
+    SELECT (i.medical_record_id + r.mr_shift)  AS id, 
+      CAST(i.birthdate AS DATE) + r.date_shift AS birthdate,
+      i.deathdate AS deathdate,
+      DATE_PART('YEAR',AGE(CAST(deathdate AS DATE),CAST (birthdate AS DATE))) AS death_age,
+      MD5(CONCAT(i.first, i.last)) AS fullname, 
+      i.race AS race,
+      i.ethnicity AS ethnicity,
+      i.gender AS gender,
+      MD5(i.address) AS address,
+      i.city AS city,
+      i.state AS state,
+      i.county AS county,
+      CAST((i.zip+RANDOM()*1000) AS INT) AS zip,
+      i.encounterclass AS encounterclass,
+      (i.encounter_id + r.mr_shift) AS encounter_id,
+      admission_date AS admission_date,
+      DATE_PART('YEAR',AGE(CAST(admission_date AS DATE), CAST(birthdate AS DATE))) AS admission_age,
+      discharge_date AS discharge_date,
+      i.code AS code,
+      i.description AS description,
+      i.reasoncode AS reasoncode, 
+      i.reasondescription AS reasondescription
+      
+    FROM inpatientregistry AS i
+    INNER JOIN 
+    randomTable AS r
+    ON i.medical_record_id=r.id)
+
+    SELECT * INTO TEMP limit_lookup FROM limitLookup
+
+
+    ```
+
+    ```{sql connection=con}
+    --- Check if table have been created successfully. 
+    SELECT * FROM limit_lookup LIMIT 5
+    ```
+
+4)  **Demonstrate Equivalence**
+
+-   In order to check if these data tables have the same patient data, following validations were conducted.
+
+    -   There should be same number of unique identifiers (medical id ). - confiremd.
+
+    -   When death ages are compared between id columns from different tables, it should have the same values.
+
+    -   When race values are compared between id columns from different tables, it should be the same.
+
+    -   Number of unique ids checked.
+
+    ```{sql connection=con}
+    --- Number of unique ids from 3 tables. (Original table): 311 checked
+    SELECT COUNT(DISTINCT medical_record_id)
+    FROM inpatientregistry
+    ```
+
+    ```{sql connection=con}
+    --- Number of unique ids from 3 tables. (full_lookup table): 311 checked
+    SELECT COUNT(DISTINCT id)
+    FROM full_lookup
+    ```
+
+    ```{sql connection=con}
+    --- Number of unique ids from 3 tables. (limit_lookup table): 311 cecked
+    SELECT COUNT(DISTINCT id)
+    FROM limit_lookup
+    ```
+
+    -   Death ages compared
+
+        -   Death ages between de-identified tables confirmed.
+
+        ```{sql connection=con}
+           WITH confirm AS (
+           SELECT (i.medical_record_id + r.mr_shift)  AS id, DATE_PART('YEAR',AGE(CAST(i.deathdate AS DATE),CAST (i.birthdate AS DATE))) AS death_age
+           FROM inpatientregistry AS i
+           INNER JOIN
+           randomTable AS r
+           ON i.medical_record_id=r.id
+        )
+        SELECT c.id, c.death_age AS original,f.death_age AS fullLookup, l.death_age AS limitLookup
+
+        FROM full_lookup AS f
+        INNER JOIN
+        limit_lookup AS l
+        ON f.id=l.id
+        INNER JOIN
+        confirm AS c
+        ON c.id=f.id
+        LIMIT 5
+        ```
+
+    -   Race compared
+
+        -   Race values between de-identified tables confirmed.
+
+    ```{sql connection=con}
+       WITH confirm_t AS (
+       SELECT (i.medical_record_id + r.mr_shift)  AS id, i.race AS race
+       FROM inpatientregistry AS i
+       INNER JOIN
+       randomTable AS r
+       ON i.medical_record_id=r.id
+    )
+    SELECT c.id, c.race AS original,f.race AS fullLookup, l.race AS limitLookup
+    FROM full_lookup AS f
+    INNER JOIN
+    limit_lookup AS l
+    ON f.id=l.id
+    INNER JOIN
+    confirm_t AS c
+    ON c.id=f.id
+    LIMIT 5
+    ```
+
+## IV. Summary & Conclusion
+
+-   Protected Health Information (PHI) is an identifiable information that are managed by related agencies (healthcare providers and other related entities) which are protected by HIPAA.
+-   In this assignment, identifiable database was converted into 1) Fully de-identified data set and 2) Limited data set.
+-   Validations to check whether each tables had the same information as the original were conducted. It was then confirmed that all data sets have the same information.
